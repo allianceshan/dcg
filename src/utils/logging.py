@@ -60,6 +60,7 @@ def get_logger():
     ch.setFormatter(formatter)
     logger.addHandler(ch)
     logger.setLevel('DEBUG')
+    logging.getLogger('matplotlib').setLevel(logging.WARNING) #plot的font 设置
 
     return logger
 

@@ -1,4 +1,5 @@
 # --- QMIX specific parameters ---
+name: "iql"
 
 # use epsilon greedy action selector
 action_selector: "epsilon_greedy"
@@ -19,4 +20,4 @@ learner: "q_learner"
 double_q: True
 mixer: # Mixer becomes None
 
-name: "iql"
+

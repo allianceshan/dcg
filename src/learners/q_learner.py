@@ -33,38 +33,39 @@ class QLearner:
         self.target_mac = copy.deepcopy(mac)
 
         self.log_stats_t = -self.args.learner_log_interval - 1
+        self.cost_his = []
 
-    def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
+    def train(self, batch: EpisodeBatch, t_env: int, episode_num: int): #batch的max_seq_length是最大步长，最多201
         # Get the relevant quantities
-        rewards = batch["reward"][:, :-1]
-        actions = batch["actions"][:, :-1]
-        terminated = batch["terminated"][:, :-1].float()
-        mask = batch["filled"][:, :-1].float()
+        rewards = batch["reward"][:, :-1] # [32.135.1]
+        actions = batch["actions"][:, :-1] # [32, 135, 4, 1 ]
+        terminated = batch["terminated"][:, :-1].float() # [32.135.1]
+        mask = batch["filled"][:, :-1].float() # [32.135.1]
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
-        avail_actions = batch["avail_actions"]
+        avail_actions = batch["avail_actions"]  # [32, 135, 4, 5]
 
-        # Calculate estimated Q-Values
+        # Calculate estimated Q-Values 得到每个智能体对应的Q值列表
         mac_out = []
         self.mac.init_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
-            agent_outs = self.mac.forward(batch, t=t)
-            mac_out.append(agent_outs)
-        mac_out = th.stack(mac_out, dim=1)  # Concat over time
+            agent_outs = self.mac.forward(batch, t=t)#[32, 4, 5]  调用basic_contro的forward
+            mac_out.append(agent_outs) # 136个【32,4,5】
+        mac_out = th.stack(mac_out, dim=1)  # Concat over time [32,136,4,5]
 
-        # Pick the Q-Values for the actions taken by each agent
-        chosen_action_qvals = th.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)  # Remove the last dim
+        # Pick the Q-Values for the actions taken by each agent   # 取出每个 agent 所选择动作的对应 Q 值
+        chosen_action_qvals = th.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)  # [32,135,4] Remove the last dim
 
-        # Calculate the Q-Values necessary for the target
+        # Calculate the Q-Values necessary for the target 得到target_q
         target_mac_out = []
         self.target_mac.init_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
-            target_agent_outs = self.target_mac.forward(batch, t=t)
+            target_agent_outs = self.target_mac.forward(batch, t=t)#调用basic_contro的forward
             target_mac_out.append(target_agent_outs)
 
-        # We don't need the first timesteps Q-Value estimate for calculating targets
-        target_mac_out = th.stack(target_mac_out[1:], dim=1)  # Concat across time
+        # We don't need the first timesteps Q-Value estimate for calculating targets 去掉第一个的Q值
+        target_mac_out = th.stack(target_mac_out[1:], dim=1)  # Concat across time [32,135,4,5]
 
-        # Mask out unavailable actions
+        # Mask out unavailable actions  将不可用动作对应的Q值设置为-999
         target_mac_out[avail_actions[:, 1:] == 0] = -9999999
 
         # Max over target Q-Values
@@ -72,29 +73,30 @@ class QLearner:
             # Get actions that maximise live Q (for double q-learning)
             mac_out_detach = mac_out.clone().detach()
             mac_out_detach[avail_actions == 0] = -9999999
-            cur_max_actions = mac_out_detach[:, 1:].max(dim=3, keepdim=True)[1]
-            target_max_qvals = th.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
+            cur_max_actions = mac_out_detach[:, 1:].max(dim=3, keepdim=True)[1]#最大Q值的动作
+            target_max_qvals = th.gather(target_mac_out, 3, cur_max_actions).squeeze(3)  #[32,135,4]
         else:
             target_max_qvals = target_mac_out.max(dim=3)[0]
 
-        # Mix
+        # Mix # qmix更新过程，evaluate网络输入的是每个agent选出来的行为的q值，target网络输入的是每个agent最大的q值，和DQN更新方式一样
         if self.mixer is not None:
-            chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])
-            target_max_qvals = self.target_mixer(target_max_qvals, batch["state"][:, 1:])
+            chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1]) #调用qmix的forward，计算当前动作  的估计Q值 #[32,135,1]
+            target_max_qvals = self.target_mixer(target_max_qvals, batch["state"][:, 1:]) #计算target网络的最大Q值 [32,135,1]
 
         # Calculate 1-step Q-Learning targets
-        targets = rewards + self.args.gamma * (1 - terminated) * target_max_qvals
+        targets = rewards + self.args.gamma * (1 - terminated) * target_max_qvals #[32,135,1]
 
         # Td-error
-        td_error = (chosen_action_qvals - targets.detach())
+        td_error = (chosen_action_qvals - targets.detach()) #[32,135,1]
 
         mask = mask.expand_as(td_error)
 
         # 0-out the targets that came from padded data
-        masked_td_error = td_error * mask
+        masked_td_error = td_error * mask#[32,135,1]
 
         # Normal L2 loss, take mean over actual data
         loss = (masked_td_error ** 2).sum() / mask.sum()
+        self.cost_his.append(loss.detach().numpy())  # 添加到cost_his中
 
         # Optimise
         self.optimiser.zero_grad()
@@ -126,7 +128,7 @@ class QLearner:
         self.target_mac.cuda()
         if self.mixer is not None:
             self.mixer.cuda()
-            self.target_mixer.cuda()
+            self.target_mixer.cuda() 
 
     def save_models(self, path):
         self.mac.save_models(path)

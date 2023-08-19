@@ -1,6 +1,8 @@
 from .q_learner import QLearner
 from components.episode_buffer import EpisodeBatch
 import torch as th
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 class DCGLearner(QLearner):
@@ -10,10 +12,10 @@ class DCGLearner(QLearner):
         """ Overrides the train method from QLearner. """
 
         # Get the relevant quantities
-        rewards = batch["reward"][:, :-1]
-        actions = batch["actions"][:, :-1]
-        terminated = batch["terminated"][:, :-1].float()
-        mask = batch["filled"][:, :-1].float()
+        rewards = batch["reward"][:, :-1]  #[32,165,1]
+        actions = batch["actions"][:, :-1] #[32,165,4,1]
+        terminated = batch["terminated"][:, :-1].float() #[32,165,1]
+        mask = batch["filled"][:, :-1].float()          #[32,165,1]
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
 
         # Calculate the maximal Q-Values of the target network
@@ -24,10 +26,10 @@ class DCGLearner(QLearner):
         for t in range(batch.max_seq_length):
             # In double Q-learning, the actions are selected greedy w.r.t. mac
             greedy = self.mac.forward(batch, t=t, policy_mode=False)
-            # Q-value of target_mac with the above greedy actions
+            # Q-value of target_mac with the above greedy actions    [166,32]
             target_out.append(self.target_mac.forward(batch, t=t, actions=greedy, policy_mode=False))
         # The TD-targets for time steps 1 to max_seq_length-1 (i.e., one step in the future)
-        target_out = th.stack(target_out[1:], dim=1).unsqueeze(dim=-1)  # Concat across time, starting at index 1
+        target_out = th.stack(target_out[1:], dim=1).unsqueeze(dim=-1)  # Concat across time, starting at index 1  [32,165,1]
         targets = rewards + self.args.gamma * (1 - terminated) * target_out
 
         # Calculate estimated Q-Values for the current actions
@@ -37,13 +39,14 @@ class DCGLearner(QLearner):
         for t in range(batch.max_seq_length - 1):
             val = self.mac.forward(batch, t=t, actions=actions[:, t], policy_mode=False, compute_grads=True)
             mac_out.append(val)
-        mac_out = th.stack(mac_out, dim=1).unsqueeze(dim=-1)  # Concat the Q-values over time
+        mac_out = th.stack(mac_out, dim=1).unsqueeze(dim=-1)  # Concat the Q-values over time  [32,165,1]
 
         # Calculate TD-error and masked loss for 1-step Q-Learning targets
         td_error = (mac_out - targets.detach())
         mask = mask.expand_as(td_error)
-        td_error = td_error * mask
+        td_error = td_error * mask  #[32,165,1]
         loss = (td_error ** 2).sum() / mask.sum()
+        self.cost_his.append(loss.detach().numpy())
 
         # Optimise the loss
         self.optimiser.zero_grad()
@@ -57,7 +60,7 @@ class DCGLearner(QLearner):
             self.last_target_update_episode = episode_num
 
         # Log important learning variables
-        if t_env - self.log_stats_t >= self.args.learner_log_interval:
+        if t_env - self.log_stats_t >= self.args.learner_log_interval:  # 2000
             self.logger.log_stat("loss", loss.item(), t_env)
             self.logger.log_stat("grad_norm", grad_norm.item(), t_env)
             mask_elems = mask.sum().item()
@@ -65,3 +68,4 @@ class DCGLearner(QLearner):
             self.logger.log_stat("q_taken_mean", (mac_out * mask).sum().item()/(mask_elems * self.args.n_agents), t_env)
             self.logger.log_stat("target_mean", (targets * mask).sum().item()/(mask_elems * self.args.n_agents), t_env)
             self.log_stats_t = t_env
+            

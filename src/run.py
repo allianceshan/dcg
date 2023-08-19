@@ -14,6 +14,7 @@ from runners import REGISTRY as r_REGISTRY
 from controllers import REGISTRY as mac_REGISTRY
 from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
+from plot_results import plot_scores_epsilon
 
 
 def run(_run, _config, _log):
@@ -27,7 +28,7 @@ def run(_run, _config, _log):
     # setup loggers
     logger = Logger(_log)
 
-    _log.info("Experiment Parameters:")
+    _log.warning("Experiment Parameters:")
     experiment_params = pprint.pformat(_config,
                                        indent=4,
                                        width=1)
@@ -60,7 +61,11 @@ def run(_run, _config, _log):
     print("Exiting script")
 
     # Making sure framework really exits
-    os._exit(os.EX_OK)
+    try:
+        OK = os.EX_OK
+    except AttributeError:  # On a non-unix system
+        OK = 0
+    os._exit(OK)
 
 
 def evaluate_sequential(args, runner):
@@ -76,7 +81,7 @@ def evaluate_sequential(args, runner):
 def run_sequential(args, logger):
 
     # Init runner so we can get env info
-    runner = r_REGISTRY[args.runner](args=args, logger=logger)
+    runner = r_REGISTRY[args.runner](args=args, logger=logger)  # episode_runner 调用Init
 
     # Set up schemes and groups here
     env_info = runner.get_env_info()
@@ -105,7 +110,7 @@ def run_sequential(args, logger):
                           device="cpu" if args.buffer_cpu_only else args.device)
 
     # Setup multiagent controller here
-    mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args)
+    mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args) # 调用 basic_controller 的 init函数，构建rnn智能体
 
     # Give runner the scheme
     runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac=mac)
@@ -163,10 +168,12 @@ def run_sequential(args, logger):
     while runner.t_env <= args.t_max:
 
         # Run for a whole episode at a time
-        episode_batch = runner.run(test_mode=False)
+        episode_batch = runner.run(test_mode=False)  # 不是测试模式，每次t_env加200。 epislon随t_env增加而递减， 动作从完全随机 逐渐考虑greedy得到的动作
+        print("===Run for a whole episode: ", episode,  ",  runner.t_env:  ",runner.t_env)
+        
         buffer.insert_episode_batch(episode_batch)
 
-        if buffer.can_sample(args.batch_size):
+        if buffer.can_sample(args.batch_size):  #有32个batch之后，就进行
             episode_sample = buffer.sample(args.batch_size)
 
             # Truncate batch to only filled timesteps
@@ -176,20 +183,22 @@ def run_sequential(args, logger):
             if episode_sample.device != args.device:
                 episode_sample.to(args.device)
 
-            learner.train(episode_sample, runner.t_env, episode)
+            learner.train(episode_sample, runner.t_env, episode)  # 调用q_learner
 
         # Execute test runs once in a while
-        n_test_runs = max(1, args.test_nepisode // runner.batch_size)
-        if (runner.t_env - last_test_T) / args.test_interval >= 1.0:
-
+        n_test_runs = max(1, args.test_nepisode // runner.batch_size)  # 整除
+        # if (runner.t_env - last_test_T) / args.test_interval >= 1.0:
+        if False: #episode % 10 == 0:
             logger.console_logger.info("t_env: {} / {}".format(runner.t_env, args.t_max))
             logger.console_logger.info("Estimated time left: {}. Time passed: {}".format(
                 time_left(last_time, last_test_T, runner.t_env, args.t_max), time_str(time.time() - start_time)))
             last_time = time.time()
 
             last_test_T = runner.t_env
-            for _ in range(n_test_runs):
-                runner.run(test_mode=True)
+            print("test_mode: ")
+            for _nn in range(1):  #(n_test_runs): #为什么是20次？
+                runner.run(test_mode=True) # 测试模式下，epsilon=0,  采用greedy算法得到的动作
+                # print("        episode: ", _nn)
 
         if args.save_model and (runner.t_env - model_save_time >= args.save_model_interval or model_save_time == 0):
             model_save_time = runner.t_env
@@ -204,11 +213,13 @@ def run_sequential(args, logger):
 
         episode += args.batch_size_run
 
-        if (runner.t_env - last_log_T) >= args.log_interval:
-            logger.log_stat("episode", episode, runner.t_env)
+        if (runner.t_env - last_log_T) >= args.log_interval:  # 2000
+            logger.log_stat("episode", episode, runner.t_env)  #将数据存入字典stats中，key：[value , t_env]
             logger.print_recent_stats()
             last_log_T = runner.t_env
-
+   
+    plot_scores_epsilon(runner.reward_hit, runner.step_hit, runner.found_target_hit,learner.cost_his)
+    runner.run(test_mode=True) 
     runner.close_env()
     logger.console_logger.info("Finished Training")
 

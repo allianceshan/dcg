@@ -13,7 +13,7 @@ import yaml
 
 from run import run
 
-SETTINGS['CAPTURE_MODE'] = "fd" # set to "no" if you want to see stdout/stderr in console
+SETTINGS['CAPTURE_MODE'] = "sys" # set to "no" if you want to see stdout/stderr in console
 logger = get_logger()
 
 ex = Experiment("pymarl")
@@ -32,7 +32,7 @@ def my_main(_run, _config, _log):
     config['env_args']['seed'] = config["seed"]
 
     # run the framework
-    run(_run, config, _log)
+    run(_run, config, logger)
 
 
 def _get_config(params, arg_name, subfolder):
@@ -81,10 +81,10 @@ if __name__ == '__main__':
             assert False, "default.yaml error: {}".format(exc)
 
     # Load algorithm and env base configs
-    env_config = _get_config(params, "--env-config", "envs")
-    alg_config = _get_config(params, "--config", "algs")
+    env_config = _get_config(params, "--env-config", "envs")   # 对应config/envs下的yaml文件
+    alg_config = _get_config(params, "--config", "algs")       # 对应config/algs下的yaml文件
     # config_dict = {**config_dict, **env_config, **alg_config}
-    config_dict = recursive_dict_update(config_dict, env_config)
+    config_dict = recursive_dict_update(config_dict, env_config)   # 覆盖默认设置中相同的条目
     config_dict = recursive_dict_update(config_dict, alg_config)
 
     # now add all the config to sacred

@@ -44,20 +44,23 @@ class EpsilonGreedyActionSelector():
     def select_action(self, agent_inputs, avail_actions, t_env, test_mode=False):
 
         # Assuming agent_inputs is a batch of Q-Values for each agent bav
-        self.epsilon = self.schedule.eval(t_env)
+        self.epsilon = self.schedule.eval(t_env)#随着算法不断训练和收敛，逐渐减小ε从而更加倾向于利用
 
         if test_mode:
             # Greedy action selection only
-            self.epsilon = 0.0
-
+            self.epsilon = 0.0 #测试模型下就贪心选择动作
+        elif self.epsilon < 1:
+            temp = 7
+        
         # mask actions that are excluded from selection
         masked_q_values = agent_inputs.clone()
         masked_q_values[avail_actions == 0.0] = -float("inf")  # should never be selected!
 
         random_numbers = th.rand_like(agent_inputs[:, :, 0])
-        pick_random = (random_numbers < self.epsilon).long()
+        pick_random = (random_numbers < self.epsilon).long() # eps=0，random为0，则选择最大的 贪心选择动作
         random_actions = Categorical(avail_actions.float()).sample().long()
 
+        #在ε较大时，贪心策略；随着ε不断减少，则随机选择动作
         picked_actions = pick_random * random_actions + (1 - pick_random) * masked_q_values.max(dim=2)[1]
         return picked_actions
 

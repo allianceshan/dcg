@@ -10,23 +10,23 @@ class BasicMAC:
         self.args = args
         input_shape = self._get_input_shape(scheme)
         self._build_agents(input_shape)
-        self.agent_output_type = args.agent_output_type
+        self.agent_output_type = args.agent_output_type  # "q"
 
-        self.action_selector = action_REGISTRY[args.action_selector](args)
+        self.action_selector = action_REGISTRY[args.action_selector](args)  # "epsilon_greedy"
 
         self.hidden_states = None
 
     def select_actions(self, ep_batch, t_ep, t_env, bs=slice(None), test_mode=False):
         # Only select actions for the selected batch elements in bs
         avail_actions = ep_batch["avail_actions"][:, t_ep]
-        agent_outputs = self.forward(ep_batch, t_ep, test_mode=test_mode)
+        agent_outputs = self.forward(ep_batch, t_ep, test_mode=test_mode)# 得到每个动作对应的Q值
         chosen_actions = self.action_selector.select_action(agent_outputs[bs], avail_actions[bs], t_env, test_mode=test_mode)
         return chosen_actions
 
     def forward(self, ep_batch, t, test_mode=False):
-        agent_inputs = self._build_inputs(ep_batch, t)
+        agent_inputs = self._build_inputs(ep_batch, t)#从batch中获取rnn_agent forward的输入
         avail_actions = ep_batch["avail_actions"][:, t]
-        agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)
+        agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)#每个智能体网络forward，输入27，输出动作的Q值[4,5]
 
         # Softmax the agent outputs if they're policy logits
         if self.agent_output_type == "pi_logits":
@@ -51,7 +51,7 @@ class BasicMAC:
                     # Zero out the unavailable actions
                     agent_outs[reshaped_avail_actions == 0] = 0.0
 
-        return agent_outs.view(ep_batch.batch_size, self.n_agents, -1)
+        return agent_outs.view(ep_batch.batch_size, self.n_agents, -1) #[1,4,5]
 
     def init_hidden(self, batch_size):
         self.hidden_states = self.agent.init_hidden().unsqueeze(0).expand(batch_size, self.n_agents, -1)  # bav
@@ -79,17 +79,17 @@ class BasicMAC:
         # Other MACs might want to e.g. delegate building inputs to each agent
         bs = batch.batch_size
         inputs = []
-        inputs.append(batch["obs"][:, t])  # b1av
+        inputs.append(batch["obs"][:, t])  # b1av  【32,4，18】
         if self.args.obs_last_action:
             if t == 0:
-                inputs.append(th.zeros_like(batch["actions_onehot"][:, t]))
+                inputs.append(th.zeros_like(batch["actions_onehot"][:, t]))  # 5
             else:
                 inputs.append(batch["actions_onehot"][:, t-1])
         if self.args.obs_agent_id:
-            inputs.append(th.eye(self.n_agents, device=batch.device).unsqueeze(0).expand(bs, -1, -1))
+            inputs.append(th.eye(self.n_agents, device=batch.device).unsqueeze(0).expand(bs, -1, -1)) # 4
 
-        inputs = th.cat([x.reshape(bs*self.n_agents, -1) for x in inputs], dim=1)
-        return inputs
+        inputs = th.cat([x.reshape(bs*self.n_agents, -1) for x in inputs], dim=1) #[128,27]
+        return inputs # 27 = 18+5+4
 
     def _get_input_shape(self, scheme):
         input_shape = scheme["obs"]["vshape"]

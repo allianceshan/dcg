@@ -15,7 +15,7 @@ class EpisodeBatch:
         self.scheme = scheme.copy()
         self.groups = groups
         self.batch_size = batch_size
-        self.max_seq_length = max_seq_length
+        self.max_seq_length = max_seq_length  #201
         self.preprocess = {} if preprocess is None else preprocess
         self.device = device
 
