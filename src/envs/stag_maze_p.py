@@ -34,6 +34,7 @@ import torch as th
 import numpy as np
 import random
 import pygame
+import copy
 from collections import namedtuple
 
 def convert(dictionary):
@@ -122,7 +123,7 @@ class StagMaze(MultiAgentEnv):
         self.agent_obs = args.agent_obs  # 观测半径，[2,2]表示周围三个网格内
         self.agent_obs_dim = np.asarray(self.agent_obs, dtype=int_type)
         
-        # self.single_grid = np.zeros((self.batch_size, self.x_max, self.y_max, self.n_agents,2), dtype=float_type)
+        self.single_grid = np.zeros((self.batch_size, self.x_max, self.y_max, self.n_agents,2), dtype=float_type)
 
         if self.observe_state:  # 观测仅是部分的，不包含智能体位置
             # The size of the global state as observation (with one additional position feature)
@@ -163,6 +164,7 @@ class StagMaze(MultiAgentEnv):
 
         self.delta_pos = -1.3
         self.delta_neg = 1.3
+        self.radius_com = args.radius_com 
 
     # ---------- INTERACTION METHODS -----------------------------------------------------------------------------------
     def reset(self):
@@ -180,7 +182,7 @@ class StagMaze(MultiAgentEnv):
 
         # Clear the grid
         self.grid.fill(0.0) #(1,10,10,3)
-        # self.single_grid.fill(0.0)
+        self.single_grid.fill(0.0)
         # Place n_agents and n_preys on the grid
 
         # self._place_actors(self.agents, 0, row=self.mountain_agent_row if self.mountain_agent_row>= 0 else None ) # 随机设置智能体位置
@@ -227,7 +229,7 @@ class StagMaze(MultiAgentEnv):
                 new_pos = self.agents[a, b, :]
                 self.grid[b, new_pos[0], new_pos[1], 3] += 1 #遍历次数，全局的
 
-                # self.single_grid[b, new_pos[0], new_pos[1], a, 1] +=1 #自己的
+                self.single_grid[b, new_pos[0], new_pos[1], a, 1] +=1 #自己的
 
                 reward_visted = 0
                 reward_visted = 1/self.grid[b, new_pos[0], new_pos[1], 3]
@@ -241,7 +243,7 @@ class StagMaze(MultiAgentEnv):
                         not_capture = False
                         if self.grid[b, self.prey[p, b, 0], self.prey[p, b, 1], 2] > self.delta_pos*4: #-3.9 -5.2
                             self.grid[b, self.prey[p, b, 0], self.prey[p, b, 1], 2] += self.delta_pos # 更新概率图 Q值
-                            # self.single_grid[b, self.prey[p, b, 0], self.prey[p, b, 1], a, 0] += self.delta_pos #自己的
+                            self.single_grid[b, self.prey[p, b, 0], self.prey[p, b, 1], a, 0] += self.delta_pos #自己的
 
                             qqpp = 1/(np.exp(self.grid[b, self.prey[p, b, 0], self.prey[p, b, 1], 2])+1)
                             if qqpp > 0.98 and self.prey_alive[p, b]:
@@ -253,10 +255,10 @@ class StagMaze(MultiAgentEnv):
                     
                 if not_capture and self.grid[b, self.agents[a, b, 0], self.agents[a, b, 1], 2] < self.delta_neg*4:
                     self.grid[b, self.agents[a, b, 0], self.agents[a, b, 1], 2] += self.delta_neg           
-                    # self.single_grid[b, self.agents[a, b, 0], self.agents[a, b, 1], a, 0] += self.delta_neg #自己的
+                    self.single_grid[b, self.agents[a, b, 0], self.agents[a, b, 1], a, 0] += self.delta_neg #自己的
 
             # terminated[b] = True if sum(self.prey_alive[:, b]) == 0 else False #不可行，无法事先知道目标个数
-       
+               
 
         # compute the cross entropy不确定性对应的奖励
         self.QtoP[:,:] = 1/(np.exp(self.grid[:,:,:,2])+1) #先转换为概率
@@ -268,6 +270,9 @@ class StagMaze(MultiAgentEnv):
         self.J_old[:,:] = self.J[:,:]
 
         coverage_rate = self.x_max*self.y_max - np.sum(self.grid[:, :,:, 3]==0)
+
+        # neiboring UAVs information merge ，改变single_grid的值
+        self.sharing_information()
 
         # Terminate if episode_limit is reached
         info = {}
@@ -286,6 +291,17 @@ class StagMaze(MultiAgentEnv):
             return reward, terminated, info, self.sum_found_target, coverage_rate
         else:
             return reward[0].item(), int(terminated[0]), info, self.sum_found_target, coverage_rate
+
+    #在通信范围内的进行通信
+    def sharing_information(self):
+        save_temp = copy.deepcopy(self.single_grid[:, :, :, :, :]) #直接用=会改变save_temp的值
+        for i in range(self.n_agents):  
+            for j in range(self.n_agents):
+                if j == i: continue
+                dis = np.abs(self.agents[i, 0, :] - self.agents[j, 0, :])
+                if np.all(dis < self.radius_com):
+                    self.single_grid[:, :, :, i, :]  +=  save_temp[:, :, :, j, :]       
+
 
     # ---------- OBSERVATION METHODS -----------------------------------------------------------------------------------
     def get_obs_agent(self, agent_id, batch=0):
@@ -444,6 +460,8 @@ class StagMaze(MultiAgentEnv):
             self.grid[batch, new_pos[0], new_pos[1], move_type] = 1
         return new_pos, collision
 
+
+
     def _is_visible(self, agents, target): #判断目标是否在智能体可见范围内
         """ agents are plural复数 and target is singular单数. """
         target = target.reshape(1, 2).repeat(agents.shape[0], 0)
@@ -486,7 +504,8 @@ class StagMaze(MultiAgentEnv):
         ushape = self.grid_shape + 2 * ashape  #[12,12]
         grid = np.zeros((self.batch_size, ushape[0], ushape[1], self.n_feats), dtype=float_type)  #(1,12,12,3)
         add_grid = np.zeros((self.batch_size, ushape[0], ushape[1], 2), dtype=float_type)  #(1,12,12,3)
-        add_grid[:, 1:11, 1:11,:] = self.grid[:,:,:, 2:4]
+        add_grid[:, 1:11, 1:11,:] =  self.single_grid[:,:,:,agent_ids, :].squeeze(-2)
+
         # Make walls
         if self.observe_walls:  #False
             wall_dim = 3 if self.observe_one_hot else 0
