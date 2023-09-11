@@ -18,7 +18,7 @@ env_args:
     mountain_slope: 0.0     # probability that an "up" action will not be executed (stag_hunt = 0.0)
     mountain_spawn: False   # whether prey spawns in their preferred habitat (True) or randomly (False)
     mountain_agent_row: -1  # the row in which the agents are spawned (0 is top). Negative values spawn agents randomly.
-    n_agents: 2             # number of hungers, i.e., agents
+    n_agents: 4             # number of hungers, i.e., agents
     n_hare: 0               # number of hares in the environment
     n_stags: 6              # number of stags in the environment
     observe_state: False    # whether an observation is only partial (False) or central including agent position (True)

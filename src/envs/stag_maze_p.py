@@ -124,6 +124,7 @@ class StagMaze(MultiAgentEnv):
         self.agent_obs_dim = np.asarray(self.agent_obs, dtype=int_type)
         
         self.single_grid = np.zeros((self.batch_size, self.x_max, self.y_max, self.n_agents,2), dtype=float_type)
+        self.Neighbor_set = np.zeros((self.n_agents, self.n_agents, 2), dtype=int_type)
 
         if self.observe_state:  # 观测仅是部分的，不包含智能体位置
             # The size of the global state as observation (with one additional position feature)
@@ -173,6 +174,7 @@ class StagMaze(MultiAgentEnv):
         self.J.fill(0.0)
         self.QtoP.fill(0.0)
         self.sum_found_target = 0
+        self.Neighbor_set.fill(0)
 
         # Reset old episode
         self.prey_alive.fill(1)
@@ -186,7 +188,7 @@ class StagMaze(MultiAgentEnv):
         # Place n_agents and n_preys on the grid
 
         # self._place_actors(self.agents, 0, row=self.mountain_agent_row if self.mountain_agent_row>= 0 else None ) # 随机设置智能体位置
-        self._place_actors(self.agents, 0, row=[0,1], col=[0,2] ) # row=None
+        self._place_actors(self.agents, 0, row=[0,1,2,3], col=[0,2,5,9] ) # row=None
 
 
         # Place the stags/goats
@@ -237,39 +239,70 @@ class StagMaze(MultiAgentEnv):
                 if collide:
                     reward[b] = reward[b] + self.collision_reward #冲突惩罚
                 
+                # 捕获猎物的奖励
                 not_capture = True
-                for p in np.random.permutation(self.n_prey):
-                    if (self.prey[p, b, :] == self.agents[a, b, :]).all():
+                for p in np.random.permutation(self.n_prey):#对于每一个智能体，分别判断每个目标是否被捕获，
+                    if (self.prey[p, b, :] == self.agents[a, b, :]).all() : #位置一致即被捕获  不根据alive进行捕获
                         not_capture = False
                         if self.grid[b, self.prey[p, b, 0], self.prey[p, b, 1], 2] > self.delta_pos*4: #-3.9 -5.2
                             self.grid[b, self.prey[p, b, 0], self.prey[p, b, 1], 2] += self.delta_pos # 更新概率图 Q值
                             self.single_grid[b, self.prey[p, b, 0], self.prey[p, b, 1], a, 0] += self.delta_pos #自己的
 
                             qqpp = 1/(np.exp(self.grid[b, self.prey[p, b, 0], self.prey[p, b, 1], 2])+1)
-                            if qqpp > 0.98 and self.prey_alive[p, b]:
+                            if qqpp > 0.98:
                                 self.sum_found_target += 1
                                 reward_target = 0
                                 reward_target = self.capture_stag_reward if self.prey_alive[p, b] else 0
                                 reward[0] += reward_target
-                                self.prey_alive[p, b] = 0
-                    
+                                self.prey_alive[p, b] = 0                   
                 if not_capture and self.grid[b, self.agents[a, b, 0], self.agents[a, b, 1], 2] < self.delta_neg*4:
                     self.grid[b, self.agents[a, b, 0], self.agents[a, b, 1], 2] += self.delta_neg           
                     self.single_grid[b, self.agents[a, b, 0], self.agents[a, b, 1], a, 0] += self.delta_neg #自己的
 
+                # 连通奖励，只有在需要连通的时候保持了连通才会获得奖励，其他情况不会有奖励
+                # f1 = w1 * self.grid[b, new_pos[0], new_pos[1], 3]
+                # f2 = w2 * self.grid[b, self.agents[a, b, 0], self.agents[a, b, 1], 2] 
+                # f3 = w3 * energy[a]
+                # f = f1 + f2 + f3
+                # dis = np.abs(self.agents[a, 0, :] - self.agents[a+1, 0, :])
+                # if f > 0 and np.all(dis < self.radius_com): #限制动作空间在连通范围内
+                #     reward[0] += 5
+
             # terminated[b] = True if sum(self.prey_alive[:, b]) == 0 else False #不可行，无法事先知道目标个数
                
-
         # compute the cross entropy不确定性对应的奖励
         self.QtoP[:,:] = 1/(np.exp(self.grid[:,:,:,2])+1) #先转换为概率
         self.J[:,:] = -self.QtoP[:,:] * np.log(self.QtoP[:,:]) - (1-self.QtoP[:,:]) * np.log(1-self.QtoP[:,:]) #计算熵
+        current_uncer = np.sum(self.J[:,:])
 
-        reward_p = 0
-        reward_p = np.sum(self.J_old[:,:] - self.J[:,:] )
-        reward[0] += reward_p #权值设置为0.5
+        reward_uncertainty = 0
+        reward_uncertainty = np.sum(self.J_old[:,:] - self.J[:,:] )
+        reward[0] += reward_uncertainty #权值设置为0.5
         self.J_old[:,:] = self.J[:,:]
 
         coverage_rate = self.x_max*self.y_max - np.sum(self.grid[:, :,:, 3]==0)
+
+        #考虑不确定性下的连通奖励
+        if current_uncer < 40:
+            for i in range(self.n_agents):
+                for k in range(self.n_agents):
+                    dis = np.abs(self.agents[i, 0, :] - self.Neighbor_set[i, k, :] )
+                    if np.all(dis < self.radius_com):
+                        reward[0] += 5
+                        break
+
+
+        #记录上次邻居
+        for i in range(self.n_agents):  
+            k = 0
+            for j in range(self.n_agents):
+                if i == j: break
+                # 更新邻居节点    
+                dis = np.abs(self.agents[i, 0, :] - self.agents[j, 0, :])
+                if np.all(dis < self.radius_com):
+                    self.Neighbor_set[i, k,  :] = self.agents[j, 0, :]
+                    k += 1
+ 
 
         # neiboring UAVs information merge ，改变single_grid的值
         self.sharing_information()
@@ -294,13 +327,14 @@ class StagMaze(MultiAgentEnv):
 
     #在通信范围内的进行通信
     def sharing_information(self):
-        save_temp = copy.deepcopy(self.single_grid[:, :, :, :, :]) #直接用=会改变save_temp的值
-        for i in range(self.n_agents):  
-            for j in range(self.n_agents):
-                if j == i: continue
+        # save_temp = copy.deepcopy(self.single_grid[:, :, :, :, :]) #直接用=会改变save_temp的值
+        for i in range(self.n_agents-1):  
+            for j in range(i+1, self.n_agents):
                 dis = np.abs(self.agents[i, 0, :] - self.agents[j, 0, :])
                 if np.all(dis < self.radius_com):
-                    self.single_grid[:, :, :, i, :]  +=  save_temp[:, :, :, j, :]       
+                    max_value = np.maximum(self.single_grid[:, :, :, i, :] , self.single_grid[:, :, :, j, :])                    
+                    self.single_grid[:, :, :, i, :]  =  max_value       
+                    self.single_grid[:, :, :, j, :]  =  max_value       
 
 
     # ---------- OBSERVATION METHODS -----------------------------------------------------------------------------------

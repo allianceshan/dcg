@@ -17,8 +17,8 @@ class DeepCoordinationGraphMAC(BasicMAC):
     def __init__(self, scheme, groups, args):
         super().__init__(scheme, groups, args)
         self.n_actions = args.n_actions  # 6
-        self.payoff_rank = args.cg_payoff_rank
-        self.payoff_decomposition = isinstance(self.payoff_rank, int) and self.payoff_rank > 0
+        self.payoff_rank = args.cg_payoff_rank # 秩>0，payoff矩阵以此秩分解。否则就是全秩矩阵
+        self.payoff_decomposition = isinstance(self.payoff_rank, int) and self.payoff_rank > 0 #False 不分解
         self.iterations = args.msg_iterations  # 8
         self.normalized = args.msg_normalized
         self.anytime = args.msg_anytime
@@ -41,7 +41,8 @@ class DeepCoordinationGraphMAC(BasicMAC):
     def annotations(self, ep_batch, t, compute_grads=False, actions=None):
         """ Returns all outputs of the utility and payoff functions (Algorithm 1 in Boehmer et al., 2020). """
         with th.no_grad() if not compute_grads else contextlib.suppress():
-            agent_inputs = self._build_inputs(ep_batch, t) #[4,27]
+            agent_inputs = self._build_inputs(ep_batch, t) #[4,27]#basic_controller里的
+            #调用rnn_feature_agent的forward,返回隐状态
             self.hidden_states = self.agent(agent_inputs, self.hidden_states)[1].view(ep_batch.batch_size, self.n_agents, -1) #[1,4,64]
             f_i = self.utilities(self.hidden_states) #[1,4,5]
             f_ij = self.payoffs(self.hidden_states)  #[1,6,5,5]
@@ -59,7 +60,7 @@ class DeepCoordinationGraphMAC(BasicMAC):
                            th.cat([hidden_states[:, self.edges_to], hidden_states[:, self.edges_from]], dim=-1)], dim=0) #[2,1,6,128]
         # Compute the payoff matrices for all edges (and flipped counterparts)
         output = self.payoff_fun(inputs) #[2,1,6,25]
-        if self.payoff_decomposition: #no
+        if self.payoff_decomposition: #no payoff矩阵不分解
             # If the payoff matrix is decomposed, we need to de-decompose it here: ...
             dim = list(output.shape[:-1])
             # ... reshape output into left and right bases of the matrix, ...
@@ -147,7 +148,7 @@ class DeepCoordinationGraphMAC(BasicMAC):
         # We either return the values for the given batch and actions...
         if actions is not None and not policy_mode:
             values = self.q_values(f_i, f_ij, actions)
-            if self.duelling:
+            if self.duelling: #False, If True, runs DCG-V
                 # Compute the state-value function only with gradient if we really need one
                 with th.no_grad() if not compute_grads else contextlib.suppress():
                     values = values + self.state_value(ep_batch['state'][:, t]).squeeze()
@@ -157,7 +158,7 @@ class DeepCoordinationGraphMAC(BasicMAC):
         if policy_mode:     # ... either as policy tensor for the runner ...
             policy = f_i.new_zeros(ep_batch.batch_size, self.n_agents, self.n_actions) #【1,4,5】
             policy.scatter_(dim=-1, index=actions, src=policy.new_ones(1, 1, 1).expand_as(actions)) #将返回的动作重新格式化为[1,4,5]矩阵形式,采取动作为1，其余为0
-            return policy
+            return policy #返回policy [4 5]
         else:               # ... or as action tensor for the learner
             return actions
 

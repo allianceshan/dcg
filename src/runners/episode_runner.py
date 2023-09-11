@@ -55,6 +55,7 @@ class EpisodeRunner:
         episode_return = 0
         self.mac.init_hidden(batch_size=self.batch_size)
         # self.env.print_agents() #先打印一下
+        reward_uncertainty_hit=[]
         while not terminated:
 
             pre_transition_data = {
@@ -70,7 +71,7 @@ class EpisodeRunner:
             actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)  # 智能体根据当前状态 返回动作，会调用dcg_controller的forward函数。算法核心
 
             reward, terminated, env_info, sum_found_target, coverage_rate = self.env.step(actions[0])  # 执行动作，调用环境stug_hunt里的step函数，返回奖励。环境核心
-
+            reward_uncertainty_hit.append(coverage_rate)
             # print( reward, terminated, env_info, sum_found_target)
             # self.env.print_agents() # 打印当前智能体和目标位置,-1是stag，智能体用数量表示
 
@@ -86,7 +87,12 @@ class EpisodeRunner:
 
             self.t += 1
         
-        print( 'tar_num:',sum_found_target, 'episode_return: ',episode_return, '  reward: ', reward, '  coverage_rate ', coverage_rate, 'steps', self.t)
+        print( 'tar_num:',sum_found_target, 'episode_return: ',episode_return, '  reward: ', reward, '  coverage_rate ', coverage_rate, 'steps', self.t) #结束一轮episode后
+        
+        # fig=plt.figure(num=1,figsize=(4,4))
+        # plt.plot(reward_uncertainty_hit,label='uncertainty')
+        # plt.show()
+        
         # self.env.print_agents() # 打印当前智能体和目标位置,-1是stag，智能体用数量表示
         self.reward_hit.append(episode_return)
         self.step_hit.append(coverage_rate)
