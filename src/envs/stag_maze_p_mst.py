@@ -37,6 +37,7 @@ import pygame
 import copy
 from collections import namedtuple
 import networkx as nx
+import math
 
 def convert(dictionary):
     return namedtuple('GenericDict', dictionary.keys())(**dictionary)
@@ -89,7 +90,7 @@ class StagMaze(MultiAgentEnv):
         self.visited = getattr(args, "visited", True) 
         self.observe_one_hot = getattr(args, "observe_one_hot", False)  # 智能体id不作为one-hot vector
         self.n_feats = 3 if self.probability else 2 #(5 if self.observe_one_hot else 3) + (1 if self.random_ghosts else 0)  # 3+0 表示每个网格有3种可能
-        self.n_feats = self.n_feats+1 if self.visited else self.n_feats
+        self.n_feats = self.n_feats+1 if self.visited else self.n_feats  # 0：agent 1:stag 2:pro 3:visited
         #self.toroidal = args.toroidal  # False表示是有边界的
         shape = args.world_shape  # [10,10]
         self.x_max, self.y_max = shape
@@ -166,13 +167,22 @@ class StagMaze(MultiAgentEnv):
         self.delta_pos = -1.3
         self.delta_neg = 1.3
         self.radius_com = args.radius_com 
+
+        self.current_uncer = 0
+        self.coverage_rate = 0
         # 创建一个无向图
         self.G = nx.Graph()
-
+        self.newG = nx.Graph()
         self.reset()
+
     # ---------- INTERACTION METHODS -----------------------------------------------------------------------------------
     def reset(self):
         self.G.clear() #清除树
+        self.newG.clear() #清除树
+
+        self.current_uncer = 0
+        self.coverage_rate = 0
+
         temp = -0.5*np.log(0.5) - (1-0.5)*np.log(1-0.5)
         self.J_old.fill(temp)
         self.J.fill(0.0)
@@ -192,19 +202,22 @@ class StagMaze(MultiAgentEnv):
         # Place n_agents and n_preys on the grid
 
         # self._place_actors(self.agents, 0, row=self.mountain_agent_row if self.mountain_agent_row>= 0 else None ) # 随机设置智能体位置
-        self._place_actors(self.agents, 0, row=[0,1,2,4], col=[0,1,1,1] ) # row=None
+        self._place_actors(self.agents, 0, row=[0,0,1,2], col=[0,1,1,1] ) # row=None
         
         """ 生成最小生成树  """
-        # for i in range(self.n_agents):
-        #     self.G.add_node(i, pos=(self.agents[i, 0, 0], self.agents[i, 0, 1]))
+        for i in range(self.n_agents):
+            self.G.add_node(i, pos=(self.agents[i, 0, 0], self.agents[i, 0, 1]))
+        for i in range(self.n_agents-1):
+            for j in range(i+1, self.n_agents):
+                dis =  self.distance_two(self.agents[i, 0, :], self.agents[j, 0, :])
+                if  dis < self.radius_com:
+                    self.G.add_edge(i, j, weight=dis )
+        self.T = nx.minimum_spanning_tree(self.G)
         
-        # for i in range(self.n_agents-1):
-        #     for j in range(i+1, self.n_agents):
-        #         dis =  np.sqrt(np.abs(np.sum(self.agents[i, 0, :] - self.agents[j, 0, :]**2)))
-        #         if  dis < self.radius_com:
-        #             self.G.add_edge(i, j, weight=dis )
-        # self.T = nx.minimum_spanning_tree(self.G)
-        
+        # # reset打印最小连通树的边及权重
+        # for edge in self.T.edges(data=True):
+        #     print(edge)
+
         # Place the stags/goats
         self._place_actors(self.prey[:self.n_stags, :, :], 1, row=0 if self.mountain_spawn else None) # row=None
         # self._place_actors(self.prey[:self.n_stags, :, :], 1, row=[2,3,5,7,9,3], col=[0,5,2,5,9,4]) # row=None
@@ -240,24 +253,59 @@ class StagMaze(MultiAgentEnv):
         # Move the agents sequentially in random order
         for b in range(self.batch_size):  # 1
             for a in np.random.permutation(self.n_agents):  # 8
-                old_pos = self.agents[a, b, :]
+                old_pos = copy.deepcopy(self.agents[a, b, :])
                 self.agents[a, b, :], collide = self._move_actor(self.agents[a, b, :], actions[a, b], b,
                                                                     np.asarray([0], dtype=int_type), 0)# 根据action移动智能体。 判断是否与智能体和猎物冲突
                 new_pos = self.agents[a, b, :]
+                
+                if np.all(old_pos == new_pos): 
+                    nothingtodo = 0
+                else:
+                    """ 生成最小生成树，本质是限制了移动空间  """
+                    self.newG.clear()
+                    for i in range(self.n_agents):
+                        self.newG.add_node(i, pos=(self.agents[i, 0, 0], self.agents[i, 0, 1]))
+                    for i in range(self.n_agents-1):
+                        for j in range(i+1, self.n_agents):
+                            dis =  self.distance_two(self.agents[i, 0, :], self.agents[j, 0, :])
+                            if  dis < self.radius_com:
+                                self.newG.add_edge(i, j, weight=dis )
+                    self.newT = nx.minimum_spanning_tree(self.newG)
 
-                # 根据MST判断是否能够维护链接
+                    connected_nodes = nx.node_connected_component(self.newT, a) #减弱限制，从整棵树连通到只要有伴就行
+                    if len(connected_nodes) > 1:
+                        # print(f"节点 {a} 与图中其他节点连通")
+                        self.G.clear()
+                        self.G = self.newG
+                        self.T = self.newT
+                    else:
+                        # print(f"节点 {a} 与图中其他节点不连通")
+                        self.agents[a, b, :] = old_pos
+                        continue
+
+                    # if not nx.is_connected(self.newT):#本质就是限制移动范围，如果当前移动不连通了，就不移动
+                    #     self.agents[a, b, :] = old_pos
+                    #     continue
+                    # else: #连通
+                    #     self.G.clear()
+                    #     self.G = self.newG
+                    #     self.T = self.newT
+
+
                 # keep_pos = False
                 # for neighbor in self.T.neighbors(a):
-                #     distance =  np.sqrt(np.abs(np.sum(new_pos - self.agents[neighbor, 0, :]**2)))
+                #     distance =  self.distance_two(new_pos - self.agents[neighbor, 0, :])
                 #     if  distance > self.radius_com: #无法保持联通，则维持原来位置
-                #         keep_pos = True
-                #         break
+                #         if self.coverage_rate > 0.50 and self.current_uncer < 220: #在20*20的区域下，不确定阈值
+                #             keep_pos = False
+                #         else:    
+                #             keep_pos = True
+                #             break
                 # if keep_pos:
                 #     self.agents[a, b, :] = old_pos
                 #     continue
                 
                 self.grid[b, new_pos[0], new_pos[1], 3] += 1 #遍历次数，全局的
-
                 self.single_grid[b, new_pos[0], new_pos[1], a, 1] +=1 #自己的
 
                 reward_visted = 0
@@ -291,35 +339,49 @@ class StagMaze(MultiAgentEnv):
         # compute the cross entropy不确定性对应的奖励
         self.QtoP[:,:] = 1/(np.exp(self.grid[:,:,:,2])+1) #先转换为概率
         self.J[:,:] = -self.QtoP[:,:] * np.log(self.QtoP[:,:]) - (1-self.QtoP[:,:]) * np.log(1-self.QtoP[:,:]) #计算熵
-        current_uncer = np.sum(self.J[:,:])
+        self.current_uncer = np.sum(self.J[:,:])
 
         reward_uncertainty = 0
         reward_uncertainty = np.sum(self.J_old[:,:] - self.J[:,:] )
         reward[0] += reward_uncertainty #权值设置为0.5
         self.J_old[:,:] = self.J[:,:]
 
-        coverage_rate = (self.x_max*self.y_max - np.sum(self.grid[:, :,:, 3]==0)) / (self.x_max*self.y_max)
+        self.coverage_rate = (self.x_max*self.y_max - np.sum(self.grid[:, :,:, 3]==0)) / (self.x_max*self.y_max)
+       
+
+
+        # # step打印最小连通树的边及权重
+        # if not nx.is_connected(self.T):
+        #     for edge in self.T.edges(data=True):
+        #         print(edge)
+
  
-        """ 重新生成 最小生成树  """
-        # self.G.clear() #清除树
-        # for i in range(self.n_agents):
-        #     self.G.add_node(i, pos=(self.agents[i, 0, 0], self.agents[i, 0, 1]))
+        """连通奖励，覆盖情况 只有在需要连通的时候保持了连通才会获得奖励，其他情况不会有奖励"""
+        """
+        if self.coverage_rate > 70:
+            #连通奖励，不确定性
+            if self.current_uncer < 30: #随区域大小变化
+                for i in range(self.n_agents):
+                    for k in range(self.n_agents):
+                        if i == k: continue                
+                        dis = np.abs(self.agents[i, 0, :] - self.agents[k, 0, :] ) #根据新移动后的位置 邻居进行判断
+                        if np.all(dis < self.radius_com):
+                            reward[0] += 1
+                            break
+        #记录上次邻居
+        # for i in range(self.n_agents):  
+        #     k = 0
+        #     for j in range(self.n_agents):
+        #         if i == j: continue
+        #         # 更新邻居节点    
+        #         dis = np.abs(self.agents[i, 0, :] - self.agents[j, 0, :])
+        #         if np.all(dis < self.radius_com):
+        #             self.Neighbor_set[i, k,  :] = self.agents[j, 0, :]
+        #             k += 1
+        """
 
-        # for i in range(self.n_agents-1):
-        #     for j in range(i+1, self.n_agents):
-        #         dis =  np.sqrt(np.abs(np.sum(self.agents[i, 0, :] - self.agents[j, 0, :]**2)))
-        #         if  dis < self.radius_com:
-        #             self.G.add_edge(i, j, weight=dis )
-
-        # self.T = nx.minimum_spanning_tree(self.G)
-
-        # # 打印最小连通树的边及权重
-        # for edge in T.edges(data=True):
-        #     print(edge)
-
-
-        # neiboring UAVs information merge ，改变single_grid的值
-        # self.sharing_information()
+        # neiboring UAVs information merge ，改变single_grid的值 不需要调用共享信息了，因为在MST下每个智能体都全局信息
+        self.sharing_information()
 
         # Terminate if episode_limit is reached
         info = {}
@@ -335,20 +397,32 @@ class StagMaze(MultiAgentEnv):
             print("Episode terminated at time %u with return %g" % (self.steps, self.sum_rewards))
 
         if self.batch_mode:
-            return reward, terminated, info, self.sum_found_target, coverage_rate, current_uncer
+            return reward, terminated, info, self.sum_found_target, self.coverage_rate,self.current_uncer
         else:
-            return reward[0].item(), int(terminated[0]), info, self.sum_found_target, coverage_rate,current_uncer
+            return reward[0].item(), int(terminated[0]), info, self.sum_found_target, self.coverage_rate,self.current_uncer
 
-    #在通信范围内的进行通信
+    def distance_two(self,vec1, vec2):
+        return np.sqrt(np.sum(np.square(vec1 - vec2)))
+
+
+
+    #在通信范围内的进行通信，针对于MST下的信息共享，
     def sharing_information(self):
         # save_temp = copy.deepcopy(self.single_grid[:, :, :, :, :]) #直接用=会改变save_temp的值
         for i in range(self.n_agents-1):  
             for j in range(i+1, self.n_agents):
-                dis = np.abs(self.agents[i, 0, :] - self.agents[j, 0, :])
-                if np.all(dis < self.radius_com):
+                dis =  self.distance_two(self.agents[i, 0, :] , self.agents[j, 0, :])  #MST注释
+                if dis < self.radius_com:    #MST注释
                     max_value = np.maximum(self.single_grid[:, :, :, i, :] , self.single_grid[:, :, :, j, :])                    
                     self.single_grid[:, :, :, i, :]  =  max_value       
                     self.single_grid[:, :, :, j, :]  =  max_value       
+
+    #针对于MST下的信息共享，它会跟所有的无人机共享信息，不是仅仅跟通信范围的无人机共享，所以
+    def mst_sharing_information(self):
+        for j in range(1, self.n_agents):
+            max_value = np.maximum(self.single_grid[:, :, :, 0, :] , self.single_grid[:, :, :, j, :])                    
+        for i in range(self.n_agents):
+            self.single_grid[:, :, :, i, :]  =  max_value       
 
 
     # ---------- OBSERVATION METHODS -----------------------------------------------------------------------------------
@@ -476,9 +550,9 @@ class StagMaze(MultiAgentEnv):
 
     def print_agents(self, batch=0):
         obs = np.zeros((self.grid_shape[0], self.grid_shape[1]))
-        obs[:,:] = self.grid[:,:,:,3]
-        # for a in range(self.n_agents):
-        #     obs[self.agents[a, batch, 0], self.agents[a, batch, 1]] = a + 1 #智能体 1 2 3 4
+        # obs[:,:] = self.grid[:,:,:,3]
+        for a in range(self.n_agents):
+            obs[self.agents[a, batch, 0], self.agents[a, batch, 1]] = a + 1 #智能体 1 2 3 4
         # for p in range(self.n_prey):
         #     if self.prey_alive[p]:
         #         obs[self.prey[p, batch, 0], self.prey[p, batch, 1]] = -p - 1 #目标 -1 -2 
@@ -551,12 +625,8 @@ class StagMaze(MultiAgentEnv):
         ashape = np.array(self.agent_obs) #[1,1]
         ushape = self.grid_shape + 2 * ashape  #[12,12]
         grid = np.zeros((self.batch_size, ushape[0], ushape[1], self.n_feats), dtype=float_type)  #(1,12,12,3)
-        
-        add_grid = np.zeros((self.batch_size, ushape[0], ushape[1], 2), dtype=float_type)  #(1,12,12,3)
-        # add_grid[:, 1:self.x_max+1, 1:self.y_max+1,:] =  self.single_grid[:,:,:,agent_ids, :].squeeze(-2)
-        
-        add_grid[:, 1:self.x_max+1, 1:self.y_max+1,:] =  self.grid[:,:,:, 2:4] #全局的概率和观测次数
-
+        add_grid = np.zeros((self.batch_size, ushape[0], ushape[1], 2), dtype=float_type)  #(1,12,12,2)
+        add_grid[:, 1:self.x_max+1, 1:self.y_max+1,:] =  self.single_grid[:,:,:,agent_ids, :].squeeze(-2) #输入的观测为各智能体自己的观测
 
         # Make walls
         if self.observe_walls:  #False
@@ -592,13 +662,12 @@ class StagMaze(MultiAgentEnv):
                        dtype=float_type) # (1,1,3,3,2)
         for b in range(self.batch_size):
             for i, a in enumerate(agent_ids):
+                # obs[i, b, :, :, :] = grid[b, (self.agents[a, b, 0]):(self.agents[a, b, 0] + 2*ashape[0] + 1),
+                #                         (self.agents[a, b, 1]):(self.agents[a, b, 1] + 2*ashape[1] + 1), :]   #全局grid只有前两维有数据，即agents和stags。只有观测范围内的数据作为观测，不是整个网格范围
                 obs[i, b, :, :, 0:2] = grid[b, (self.agents[a, b, 0]):(self.agents[a, b, 0] + 2*ashape[0] + 1),
                                           (self.agents[a, b, 1]):(self.agents[a, b, 1] + 2*ashape[1] + 1), 0:2]
                 obs[i, b, :, :, 2:4] = add_grid[b, (self.agents[a, b, 0]):(self.agents[a, b, 0] + 2*ashape[0] + 1),
                                           (self.agents[a, b, 1]):(self.agents[a, b, 1] + 2*ashape[1] + 1), :]  #概率和观测次数
-                # obs[i, b, :, :, :] = grid[b, (self.agents[a, b, 0]):(self.agents[a, b, 0] + 2*ashape[0] + 1),
-                #                           (self.agents[a, b, 1]):(self.agents[a, b, 1] + 2*ashape[1] + 1), :]
-                
 
         obs = obs.reshape(len(agent_ids), self.batch_size, -1) #(1,1,18)
 

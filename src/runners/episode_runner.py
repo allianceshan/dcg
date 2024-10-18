@@ -28,6 +28,7 @@ class EpisodeRunner:
         self.reward_hit=[]
         self.step_hit=[]
         self.found_target_hit=[]
+        self.current_uncer_hit = []
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(EpisodeBatch, scheme, groups, self.batch_size, self.episode_limit + 1,
@@ -70,8 +71,8 @@ class EpisodeRunner:
             # Receive the actions for each agent at this timestep in a batch of size 1
             actions = self.mac.select_actions(self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode)  # 智能体根据当前状态 返回动作，会调用dcg_controller的forward函数。算法核心
 
-            reward, terminated, env_info, sum_found_target, coverage_rate = self.env.step(actions[0])  # 执行动作，调用环境stug_hunt里的step函数，返回奖励。环境核心
-            reward_uncertainty_hit.append(coverage_rate)
+            reward, terminated, env_info, sum_found_target, coverage_rate,current_uncer = self.env.step(actions[0])  # 执行动作，调用环境stug_hunt里的step函数，返回奖励。环境核心
+            reward_uncertainty_hit.append(current_uncer)
             # print( reward, terminated, env_info, sum_found_target)
             # self.env.print_agents() # 打印当前智能体和目标位置,-1是stag，智能体用数量表示
 
@@ -87,7 +88,7 @@ class EpisodeRunner:
 
             self.t += 1
         
-        print( 'tar_num:',sum_found_target, 'episode_return: ',episode_return, '  reward: ', reward, '  coverage_rate ', coverage_rate, 'steps', self.t) #结束一轮episode后
+        print( 'tar_num:',sum_found_target, 'episode_return: ',episode_return, '  reward: ', reward, '  coverage_rate ', coverage_rate, 'current_uncer', current_uncer) #结束一轮episode后
         
         # fig=plt.figure(num=1,figsize=(4,4))
         # plt.plot(reward_uncertainty_hit,label='uncertainty')
@@ -97,6 +98,7 @@ class EpisodeRunner:
         self.reward_hit.append(episode_return)
         self.step_hit.append(coverage_rate)
         self.found_target_hit.append(sum_found_target)
+        self.current_uncer_hit.append(current_uncer)
 
         last_data = {
             "state": [self.env.get_state()],

@@ -33,6 +33,6 @@ def plot_scores_epsilon(rewards_history, step_history, found_target_hit, epsilon
 
     axarr[3].plot(epsilon_history, label='loss')
     axarr[3].set_xlabel('Episodes')
-    axarr[3].set_ylabel('Loss')
+    axarr[3].set_ylabel('current_uncer')
     axarr[3].legend()
     plt.show()

@@ -1,46 +1,23 @@
-import random
 import networkx as nx
-import matplotlib.pyplot as plt
 
-def generate_grid_graph(grid_size):
-    G = nx.grid_2d_graph(grid_size, grid_size)
-    return G
+# 创建一个无向图
+G = nx.Graph()
 
-def get_min_spanning_tree(G):
-    return nx.minimum_spanning_tree(G)
+# 添加节点
+G.add_node(1, pos=(0, 0))
+G.add_node(2, pos=(1, 1))
+G.add_node(3, pos=(2, 2))
+G.add_node(4, pos=(3, 3))
 
-def move_agents(agents, min_spanning_tree):
-    for agent_id in range(len(agents)):
-        agent = agents[agent_id]
-        neighbors = list(min_spanning_tree.neighbors(agent))
-        if neighbors:
-            next_move = random.choice(neighbors)
-            agents[agent_id] = next_move
+# 添加带权重的边
+G.add_edge(1, 2, weight=2.0)
+G.add_edge(1, 3, weight=4.0)
+G.add_edge(2, 3, weight=1.0)
+G.add_edge(3, 4, weight=3.0)
 
-def plot_agents_and_tree(min_spanning_tree, agents):
-    pos = {(x, y): (y, -x) for x, y in min_spanning_tree.nodes()}
-    nx.draw(min_spanning_tree, pos, with_labels=False, node_size=10, node_color='b', font_size=8)
-    for agent_id, agent in enumerate(agents):
-        plt.scatter(agent[1], -agent[0], label=f'Agent {agent_id + 1}', s=50, c='r')
-    plt.title("Agents' Positions and Minimum Spanning Tree")
+# 生成最小连通树
+T = nx.minimum_spanning_tree(G)
 
-grid_size = 10
-n_agents = 3
-n_steps = 10
-
-G = generate_grid_graph(grid_size)
-G.add_weight_eage_from()
-min_spanning_tree = get_min_spanning_tree(G)
-agents = [(random.randint(0, grid_size - 1), random.randint(0, grid_size - 1)) for _ in range(n_agents)]
-plot_agents_and_tree(min_spanning_tree, agents)
-plt.legend()
-
-
-for step in range(n_steps):
-    move_agents(agents, min_spanning_tree)
-    G = generate_grid_graph(grid_size)  # 重新生成网格图
-    min_spanning_tree = get_min_spanning_tree(G)
-
-    plot_agents_and_tree(min_spanning_tree, agents)
-    plt.legend()
-    plt.show()
+# 打印最小连通树的边及权重
+for edge in T.edges(data=True):
+    print(edge)

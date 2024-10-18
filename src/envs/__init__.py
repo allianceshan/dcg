@@ -24,3 +24,6 @@ REGISTRY["stag_maze"] = partial(env_fn, env=StagMaze)
 
 from .stag_maze_p import StagMaze
 REGISTRY["stag_maze_p"] = partial(env_fn, env=StagMaze)
+
+from .stag_maze_p_mst import StagMaze
+REGISTRY["stag_maze_p_mst"] = partial(env_fn, env=StagMaze)

@@ -1,6 +1,6 @@
 # ---- Defines the Relative Overgeneralization experiment from Boehmer et al. (2020).
 
-env: "stag_maze_p"            # a grid-world class that allows to hunt two different types of prey
+env: "stag_maze_p_mst"            # a grid-world class that allows to hunt two different types of prey
 
 env_args:
     agent_obs: [1, 1]       # (radius-1) of the agent's observation, e.g., [0, 0] observes only one pixel
@@ -41,9 +41,9 @@ env_args:
     reward_time: -0.1          # reward (or punishment) given at each time step
     state_as_graph: False   # whether the state is a list of entities (True) or the entire grid (False 
     toroidal: False         # whether the world is bounded (False) or toroidal (True)
-    world_shape: [10, 10]   # the shape of the grid-world [height, width]
+    world_shape: [20, 20]   # the shape of the grid-world [height, width]
     probability: True
     visited: True
-    radius_com: 5
-t_max: 250000  # 3000000              # number of time steps of the experiment
+    radius_com: 3
+t_max: 100000  # 3000000              # number of time steps of the experiment
 

@@ -4,6 +4,7 @@ import pprint
 import time
 import threading
 import torch as th
+import pickle
 from types import SimpleNamespace as SN
 from utils.logging import Logger
 from utils.timehelper import time_left, time_str
@@ -218,7 +219,12 @@ def run_sequential(args, logger):
             logger.print_recent_stats()
             last_log_T = runner.t_env
    
-    plot_scores_epsilon(runner.reward_hit, runner.step_hit, runner.found_target_hit,learner.cost_his)
+    plot_scores_epsilon(runner.reward_hit, runner.step_hit, runner.found_target_hit, runner.current_uncer_hit)
+    # 将列表数据保存到文件
+    with open('NEWmst_r=3.pkl', 'wb') as file:
+        pickle.dump([runner.reward_hit, runner.step_hit, runner.found_target_hit, runner.current_uncer_hit], file)
+
+
     runner.run(test_mode=True) 
     runner.close_env()
     logger.console_logger.info("Finished Training")
